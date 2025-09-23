@@ -1,8 +1,11 @@
 export default {
   async fetch(request, env) {
-    const inputs = {
-      prompt: "paw patrol, chase, marshall, rocky, rubble, skye, zuma, everest, tracker",
-    };
+    // Parse query string
+    const url = new URL(request.url);
+    const prompt = url.searchParams.get("prompt") || 
+      "kenzi.ai IT Company Logo, white background";
+
+    const inputs = { prompt };
 
     const response = await env.AI.run(
       "@cf/stabilityai/stable-diffusion-xl-base-1.0",
