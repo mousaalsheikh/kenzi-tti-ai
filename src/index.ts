@@ -2,8 +2,8 @@ export default {
   async fetch(request, env) {
     // Parse query string
     const url = new URL(request.url);
-    const prompt = url.searchParams.get("prompt") || 
-      "kenzi.ai IT Company Logo, white background";
+    const prompt = url.searchParams.get("prompt") ||
+      "A futuristic humanoid robot, sleek design, glowing blue eyes, ultra-detailed, 4k illustration";
 
     const inputs = { prompt };
 
