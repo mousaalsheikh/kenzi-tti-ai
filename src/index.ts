@@ -1,5 +1,5 @@
 // text-to-image Worker (smarter prompting)
-const ALLOWED_ORIGINS = new Set(['https://generate.kenzi.ai']); // CORS
+const ALLOWED_ORIGINS = new Set(['*']); // CORS
 
 // Style presets you can tweak
 const STYLES: Record<string, {prefix: string; suffix?: string}> = {
