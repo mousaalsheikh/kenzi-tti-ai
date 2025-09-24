@@ -6,11 +6,12 @@ export default {
     };
 
     const response = await env.AI.run(
-      "@cf/stabilityai/stable-diffusion-xl-base-1.0",
+      "@cf/black-forest-labs/flux-1-schnell",
       inputs,
     );
 
-    return new Response(response, {
+    // Assuming the response object has an 'image' property containing the image data as ArrayBuffer or Uint8Array
+    return new Response(response.image, {
       headers: {
         "content-type": "image/png",
       },
