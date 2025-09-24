@@ -1,92 +1,46 @@
-// text-to-image Worker (smarter prompting) — CORS always on
-// Style presets you can tweak
-const STYLES: Record<string, { prefix: string; suffix?: string }> = {
-  "kids-3d": {
-    prefix:
-      "Cute 3D render, soft studio lighting, toy-like materials, Pixar/Paw-Patrol-inspired aesthetic, kid-friendly, bright colors,",
-    suffix:
-      "octane render, subsurface scattering, global illumination, high quality",
-  },
-  cartoon: {
-    prefix:
-      "Colorful cartoon illustration, clean outlines, flat shading, vector aesthetic,",
-    suffix: "bold shapes, simple background, high contrast",
-  },
-  realistic: {
-    prefix:
-      "Ultra-detailed, photorealistic, 85mm lens, shallow depth of field, cinematic lighting, volumetric light,",
-    suffix: "film grain, natural color grading, high dynamic range",
-  },
-  anime: {
-    prefix:
-      "Anime key visual, vibrant cel shading, detailed character design, dynamic pose,",
-    suffix: "studio-quality background, crisp lineart",
-  },
-};
-
-// Good default “negative prompt” to avoid common SDXL artifacts
-const DEFAULT_NEGATIVE =
-  "low quality, blurry, deformed, extra limbs, extra fingers, fused fingers, poorly drawn, bad anatomy, watermark, text, logo, grainy, noisy, oversaturated, jpeg artifacts, cropped, out of frame";
-
+// Text-to-image Worker — "prompt-only" good defaults (CORS always on)
 export default {
   async fetch(request: Request, env: any) {
-    // --- CORS preflight ---
+    // CORS preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET, OPTIONS",
-          "access-control-allow-headers": "*",
-          "access-control-max-age": "86400",
-          "vary": "origin",
-        },
-      });
+      return new Response(null, { headers: corsHeaders() });
     }
 
     try {
       const url = new URL(request.url);
+      const raw = (url.searchParams.get("prompt") || "").trim();
 
-      // ---- Inputs from QS
-      const rawPrompt = (url.searchParams.get("prompt") || "").trim();
-      const styleKey = (url.searchParams.get("style") || "kids-3d").toLowerCase();
-      const negative = (url.searchParams.get("negative") || DEFAULT_NEGATIVE).trim();
+      // 1) Rewrite vague/brand-ish prompts to descriptive subjects
+      const base = rewriteBrandish(raw);
 
-      const width = clamp64(parseInt(url.searchParams.get("width") || "768", 10));   // larger default
-      const height = clamp64(parseInt(url.searchParams.get("height") || "512", 10)); // landscape
+      // 2) Build rich prompt: subject + action + setting + style hints
+      const enriched = enrich(base);
 
-      const steps = clamp(parseInt(url.searchParams.get("steps") || "28", 10), 10, 60);
-      const guidance = clamp(parseFloat(url.searchParams.get("cfg") || "7.5"), 1, 15);
-      const seed = url.searchParams.has("seed")
-        ? parseInt(url.searchParams.get("seed")!, 10)
-        : undefined;
+      // 3) Tuned negative prompt for SDXL
+      const negative =
+        "low quality, blurry, deformed, extra limbs, extra fingers, fused fingers, poorly drawn, bad anatomy, watermark, text, logo, caption, grainy, noisy, oversaturated, jpeg artifacts, cropped, out of frame";
 
-      // ---- Build “smart” prompt
-      const style = STYLES[styleKey] || STYLES["kids-3d"];
-      const userPart =
-        rawPrompt || "friendly rescue puppies in uniforms helping the city"; // smarter default than a single brand word
-      const enrichedPrompt = buildPrompt(userPart, style);
+      // 4) Sane SDXL params (good results without extra inputs)
+      const width = 768;          // strong detail without being too slow
+      const height = 512;         // cinematic landscape
+      const num_steps = 30;       // quality/speed balance
+      const guidance = 8.5;       // prompt adherence
+      const seed = Math.floor(Math.random() * 1e9); // variety per request
 
-      // ---- Generate
-      const inputs: any = {
-        prompt: enrichedPrompt,
+      const png = await env.AI.run("@cf/stabilityai/stable-diffusion-xl-base-1.0", {
+        prompt: enriched,
         negative_prompt: negative,
         width,
         height,
-        num_steps: steps,
+        num_steps,
         guidance,
-      };
-      if (Number.isFinite(seed)) inputs.seed = seed;
-
-      const png = await env.AI.run(
-        "@cf/stabilityai/stable-diffusion-xl-base-1.0",
-        inputs
-      );
+        seed,
+      });
 
       return new Response(png, {
         headers: {
           "content-type": "image/png",
           "cache-control": "no-store",
-          // CORS: always allow (no credentials used)
           "access-control-allow-origin": "*",
           "vary": "origin",
         },
@@ -102,33 +56,51 @@ export default {
       });
     }
 
-    // ---- helpers
-    function buildPrompt(
-      user: string,
-      s: { prefix: string; suffix?: string }
-    ) {
-      // If user only typed 1–3 words, expand with more context to avoid generic output
-      const tokenCount = user.split(/\s+/).filter(Boolean).length;
-      const addDetail =
-        tokenCount < 6
-          ? ", highly detailed, coherent composition, professional lighting, award-winning render"
-          : "";
-
-      // Encourage subject clarity: main subject first, then style & render hints
-      return `${s.prefix} ${user}${addDetail}${
-        s.suffix ? ", " + s.suffix : ""
-      }`;
+    // ---------- helpers ----------
+    function corsHeaders() {
+      return {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, OPTIONS",
+        "access-control-allow-headers": "*",
+        "access-control-max-age": "86400",
+        "vary": "origin",
+      };
     }
 
-    function clamp(v: number, min: number, max: number) {
-      if (!Number.isFinite(v)) return min;
-      return Math.max(min, Math.min(max, v));
+    // Expand short / vague prompts into a clear subject
+    function enrich(user: string) {
+      // If the user typed very little, add action + setting for better composition
+      const tokens = user.split(/\s+/).filter(Boolean);
+      const isShort = tokens.length <= 6;
+
+      // Style pack (neutral but cinematic)
+      const stylePrefix =
+        "Highly coherent composition, cinematic lighting, volumetric light, soft shadows,";
+      const styleSuffix =
+        "sharp focus, high dynamic range, award-winning render, professional quality";
+
+      // Defaults if very short
+      let subject = user || "friendly puppy rescue team in colorful uniforms";
+      if (isShort) {
+        // Pick an action/setting that works for most subjects
+        subject += ", dynamic action scene, in a lively city square at golden hour";
+      }
+
+      // Final enriched prompt
+      return `${stylePrefix} ${subject}, ${styleSuffix}`;
     }
 
-    function clamp64(v: number) {
-      v = Number.isFinite(v) ? v : 512;
-      v = Math.max(64, Math.min(1024, v));
-      return Math.round(v / 64) * 64;
+    // Replace brand/IP-like phrases with generic, descriptive wording
+    function rewriteBrandish(raw: string) {
+      let t = raw || "";
+      const map: Array<[RegExp, string]> = [
+        [/\bpaw\s*patrol\b/i, "friendly puppy rescue team in colorful uniforms"],
+        [/\bpixar\b/i, "soft 3D toy aesthetic"],
+        [/\bmarvel\b/i, "dynamic comic-book style"],
+        [/\bstar\s*wars\b/i, "futuristic sci-fi setting"],
+      ];
+      for (const [re, repl] of map) t = t.replace(re, repl);
+      return t;
     }
   },
 };
